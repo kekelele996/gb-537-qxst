@@ -14,15 +14,16 @@ import (
 )
 
 const (
-	CodeValidation       = "VALIDATION_FAILED"
-	CodeUnauthorized     = "UNAUTHORIZED"
-	CodeForbidden        = "FORBIDDEN"
-	CodeNotFound         = "NOT_FOUND"
-	CodeConflict         = "CONFLICT"
-	CodeStateTransition  = "INVALID_STATE_TRANSITION"
-	CodeIdempotency      = "IDEMPOTENCY_CONFLICT"
-	CodeReviewerConflict = "REVIEWER_SEPARATION_REQUIRED"
-	CodeInternal         = "INTERNAL_ERROR"
+	CodeValidation            = "VALIDATION_FAILED"
+	CodeUnauthorized          = "UNAUTHORIZED"
+	CodeForbidden             = "FORBIDDEN"
+	CodeNotFound              = "NOT_FOUND"
+	CodeConflict              = "CONFLICT"
+	CodeStateTransition       = "INVALID_STATE_TRANSITION"
+	CodeIdempotency           = "IDEMPOTENCY_CONFLICT"
+	CodeReviewerConflict      = "REVIEWER_SEPARATION_REQUIRED"
+	CodeScenarioNotComparable = "SCENARIO_NOT_COMPARABLE"
+	CodeInternal              = "INTERNAL_ERROR"
 )
 
 type APIError struct {

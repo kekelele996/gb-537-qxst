@@ -153,7 +153,7 @@ func seedDomain(tx *gorm.DB, users map[string]model.User) error {
 		return err
 	}
 	services[2].DependencyEdgesJSON = string(workerEdge)
-	snapshot := algorithm.NewSnapshot(algorithm.ScenarioConfig{Name: "Production platform root rollover rehearsal", OldAnchorID: anchors[0].ID, NewAnchorID: anchors[1].ID, OverlapStart: now.Add(14 * 24 * time.Hour), OverlapEnd: now.Add(30 * 24 * time.Hour), CandidateChainIDs: []uint{chains[0].ID, chains[1].ID}, SimulationTime: now.Add(21 * 24 * time.Hour)}, []algorithm.AnchorSnapshot{{ID: anchors[0].ID, Code: anchors[0].AnchorCode, State: anchors[0].CertificateState, NotBefore: anchors[0].NotBefore, NotAfter: anchors[0].NotAfter}, {ID: anchors[1].ID, Code: anchors[1].AnchorCode, State: anchors[1].CertificateState, NotBefore: anchors[1].NotBefore, NotAfter: anchors[1].NotAfter}}, []algorithm.ChainSnapshot{{ID: chains[0].ID, Code: chains[0].ChainCode, AnchorID: chains[0].TrustAnchorID, LeafSubject: chains[0].LeafSubject, ValidFrom: chains[0].ValidFrom, ValidTo: chains[0].ValidTo, State: chains[0].ChainState, ValidationValid: true}, {ID: chains[1].ID, Code: chains[1].ChainCode, AnchorID: chains[1].TrustAnchorID, LeafSubject: chains[1].LeafSubject, ValidFrom: chains[1].ValidFrom, ValidTo: chains[1].ValidTo, State: chains[1].ChainState, ValidationValid: true}}, []algorithm.ServiceSnapshot{{ID: services[0].ID, Code: services[0].ServiceCode, ChainID: services[0].ChainID, TrustAnchorIDs: []uint{anchors[0].ID, anchors[1].ID}, Criticality: services[0].Criticality, State: services[0].ServiceState}, {ID: services[1].ID, Code: services[1].ServiceCode, ChainID: services[1].ChainID, TrustAnchorIDs: []uint{anchors[0].ID}, DependencyIDs: []uint{services[0].ID}, Criticality: services[1].Criticality, State: services[1].ServiceState}, {ID: services[2].ID, Code: services[2].ServiceCode, ChainID: services[2].ChainID, TrustAnchorIDs: []uint{anchors[0].ID, anchors[1].ID}, DependencyIDs: []uint{services[1].ID}, Criticality: services[2].Criticality, State: services[2].ServiceState}})
+	snapshot := seedScenarioSnapshot(anchors, chains, services, now.Add(14*24*time.Hour), now.Add(30*24*time.Hour), now.Add(21*24*time.Hour))
 	result, err := algorithm.Simulate(snapshot)
 	if err != nil {
 		return fmt.Errorf("simulate seed rollover: %w", err)
@@ -172,7 +172,57 @@ func seedDomain(tx *gorm.DB, users map[string]model.User) error {
 	if err := tx.Create(&scenario).Error; err != nil {
 		return fmt.Errorf("create seed rollover scenario: %w", err)
 	}
+	adjustedSnapshot := seedScenarioSnapshot(anchors, chains, services, now.Add(7*24*time.Hour), now.Add(45*24*time.Hour), now.Add(21*24*time.Hour))
+	adjustedResult, err := algorithm.Simulate(adjustedSnapshot)
+	if err != nil {
+		return fmt.Errorf("simulate adjusted seed rollover: %w", err)
+	}
+	adjustedHash, err := adjustedSnapshot.Hash()
+	if err != nil {
+		return err
+	}
+	frozenBase, _ := snapshot.FrozenInputHash()
+	frozenAdjusted, _ := adjustedSnapshot.FrozenInputHash()
+	if frozenBase != frozenAdjusted {
+		return fmt.Errorf("seed rehearsal pair must share frozen input topology")
+	}
+	adjustedJSON, _ := adjustedSnapshot.Canonical()
+	adjustedAffectedJSON, _ := json.Marshal(adjustedResult.AffectedServices)
+	adjustedPathsJSON, _ := json.Marshal(adjustedResult.BrokenPaths)
+	adjustedEvidenceJSON, _ := json.Marshal(adjustedResult.Evidence)
+	adjusted := model.RolloverScenario{Name: "Production platform root rollover rehearsal (widened overlap)", OldAnchorID: anchors[0].ID, NewAnchorID: anchors[1].ID, OverlapStart: adjustedSnapshot.Config.OverlapStart, OverlapEnd: adjustedSnapshot.Config.OverlapEnd, CandidateChainIDs: string(candidateJSON), AlgorithmVersion: algorithm.Version, InputHash: adjustedHash, InputSnapshot: adjustedJSON, SimulationTime: adjustedSnapshot.Config.SimulationTime, AffectedServicesJSON: string(adjustedAffectedJSON), BrokenPathsJSON: string(adjustedPathsJSON), PathEvidenceJSON: string(adjustedEvidenceJSON), ScenarioState: string(constants.ScenarioSimulated), Explanation: adjustedResult.Explanation, CreatedBy: operator.ID, CreatedByName: operator.Username, IdempotencyKey: "seed-rollover-simulation-widened", DurationMS: 1, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)}
+	if err := tx.Create(&adjusted).Error; err != nil {
+		return fmt.Errorf("create adjusted seed rollover scenario: %w", err)
+	}
 	return nil
+}
+
+func seedScenarioSnapshot(anchors []model.TrustAnchor, chains []model.CertificateChain, services []model.DependentService, overlapStart, overlapEnd, simulationTime time.Time) algorithm.Snapshot {
+	anchorSnapshots := make([]algorithm.AnchorSnapshot, 0, len(anchors))
+	for _, anchor := range anchors {
+		anchorSnapshots = append(anchorSnapshots, algorithm.AnchorSnapshot{ID: anchor.ID, Code: anchor.AnchorCode, State: anchor.CertificateState, NotBefore: anchor.NotBefore, NotAfter: anchor.NotAfter})
+	}
+	chainSnapshots := make([]algorithm.ChainSnapshot, 0, len(chains))
+	for _, chain := range chains {
+		var evidence struct {
+			Valid bool `json:"valid"`
+		}
+		_ = json.Unmarshal([]byte(chain.ValidationResult), &evidence)
+		chainSnapshots = append(chainSnapshots, algorithm.ChainSnapshot{ID: chain.ID, Code: chain.ChainCode, AnchorID: chain.TrustAnchorID, LeafSubject: chain.LeafSubject, ValidFrom: chain.ValidFrom, ValidTo: chain.ValidTo, State: chain.ChainState, ValidationValid: evidence.Valid})
+	}
+	chainIDs := make([]uint, 0, len(chains))
+	for _, chain := range chains {
+		chainIDs = append(chainIDs, chain.ID)
+	}
+	serviceSnapshots := make([]algorithm.ServiceSnapshot, 0, len(services))
+	for _, service := range services {
+		var trust []uint
+		_ = json.Unmarshal([]byte(service.ClientTrustRefsJSON), &trust)
+		var dependencies []uint
+		_ = json.Unmarshal([]byte(service.DependencyEdgesJSON), &dependencies)
+		serviceSnapshots = append(serviceSnapshots, algorithm.ServiceSnapshot{ID: service.ID, Code: service.ServiceCode, ChainID: service.ChainID, TrustAnchorIDs: trust, DependencyIDs: dependencies, Criticality: service.Criticality, State: service.ServiceState})
+	}
+	return algorithm.NewSnapshot(algorithm.ScenarioConfig{Name: "Production platform root rollover rehearsal", OldAnchorID: anchors[0].ID, NewAnchorID: anchors[1].ID, OverlapStart: overlapStart, OverlapEnd: overlapEnd, CandidateChainIDs: chainIDs, SimulationTime: simulationTime}, anchorSnapshots, chainSnapshots, serviceSnapshots)
 }
 
 func seedChain(code string, anchor model.TrustAnchor, leafPEM string, now time.Time) (model.CertificateChain, error) {

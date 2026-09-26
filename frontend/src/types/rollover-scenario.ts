@@ -47,6 +47,7 @@ export interface RolloverScenario {
   candidate_chain_ids: number[]
   algorithm_version: string
   input_hash: string
+  frozen_input_hash: string
   simulation_time: string
   affected_services_json: AffectedService[]
   broken_paths_json: BrokenPath[]
@@ -72,5 +73,48 @@ export interface CreateRolloverScenarioInput {
   overlap_end: string
   candidate_chain_ids: number[]
   simulation_time: string
+}
+
+export interface ImpactChange {
+  service_id: number
+  service_code: string
+  criticality: string
+  at: string
+  reason: string
+}
+
+export interface PathChange {
+  at: string
+  service_codes: string[]
+  reason: string
+}
+
+export interface CriticalityCounts {
+  critical: number
+  high: number
+  medium: number
+  low: number
+}
+
+export interface ComparisonSide {
+  scenario_id: number
+  name: string
+  scenario_state: ScenarioState
+  overlap_start: string
+  overlap_end: string
+  affected_service_count: number
+  broken_path_count: number
+  distinct_affected_count: number
+  critical_affected_count: number
+  criticality_breakdown: CriticalityCounts
+}
+
+export interface ScenarioComparison {
+  first: ComparisonSide
+  second: ComparisonSide
+  new_impacts: ImpactChange[]
+  resolved_impacts: ImpactChange[]
+  eliminated_broken_paths: PathChange[]
+  introduced_broken_paths: PathChange[]
 }
 

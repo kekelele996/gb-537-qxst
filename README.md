@@ -69,6 +69,17 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
 
+## Side-by-side rehearsal review
+
+`GET /api/v1/rollover-scenarios/:id/compare/:other_id` supports review meetings where only the overlap window was adjusted. It returns, grouped by service and critical timepoint:
+
+- `new_impacts`: service-timepoint failures introduced by the second scenario;
+- `resolved_impacts`: failures that recovered;
+- `eliminated_broken_paths` and `introduced_broken_paths`;
+- per-side `critical_affected_count` plus a criticality breakdown (`critical/high/medium/low`).
+
+The endpoint never splices incompatible evidence. Both scenarios must already be simulated, share the same `algorithm_version`, and share the same frozen-input fingerprint. The fingerprint covers the selected anchor pair, candidate chains, and the frozen trust topology (anchors, certificate chains, service dependency graph); it excludes the scenario name, overlap window, and simulation time, so window-only adjustments remain comparable. Any mismatch returns `409 SCENARIO_NOT_COMPARABLE` with the specific reason, which the rollover page shows instead of a merged result.
+
 ## Configuration and ports
 
 Copy `.env.example` to `.env` for local configuration. `.env` is intentionally ignored by Git.

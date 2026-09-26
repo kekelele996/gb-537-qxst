@@ -1,5 +1,5 @@
-import { AddRounded, ArrowForwardRounded, AutorenewRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
-import { Alert, Box, Button, Checkbox, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
+import { AddRounded, ArrowForwardRounded, AutorenewRounded, CompareArrowsRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
+import { Alert, Box, Button, Checkbox, Collapse, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import { FormEvent, useEffect, useState } from 'react'
 import { errorMessage } from '../api/client'
 import { DependencyGraph } from '../components/common/DependencyGraph'
@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/common/DataS
 import { Fingerprint } from '../components/common/Fingerprint'
 import { FormDrawer } from '../components/common/FormDrawer'
 import { PageHeader } from '../components/common/PageHeader'
+import { ScenarioComparisonPanel } from '../components/common/ScenarioComparisonPanel'
 import { ScenarioStateBadge } from '../components/common/ScenarioStateBadge'
 import { StatStrip } from '../components/common/StatStrip'
 import { ValidationEvidenceDrawer } from '../components/common/ValidationEvidenceDrawer'
@@ -42,6 +43,7 @@ export function RolloversPage() {
   const simulation = useRolloverSimulation()
   const [createOpen, setCreateOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
   const [form, setForm] = useState<CreateRolloverScenarioInput>(defaultScenario)
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
@@ -49,6 +51,7 @@ export function RolloversPage() {
 
   useEffect(() => { void fetchScenarios(); void fetchAnchors(); void fetchChains(); void fetchServices() }, [fetchAnchors, fetchChains, fetchScenarios, fetchServices])
   useEffect(() => { if (!active && items.length) select(items[0]) }, [active, items, select])
+  useEffect(() => { setCompareOpen(false) }, [active?.id])
   const affectedIds = active?.affected_services_json.map((item) => item.service_id ?? item.id).filter(Boolean) as number[] | undefined
 
   const openCreate = () => {
@@ -106,8 +109,12 @@ export function RolloversPage() {
             {canAdvance && !reviewerConflict && <Button variant="contained" startIcon={next?.to === 'verified' ? <FactCheckRounded /> : <ArrowForwardRounded />} disabled={busy} onClick={() => next && transitionActive(next.to)}>{next?.label}</Button>}
             {active.scenario_state !== 'draft' && can('scenario.run') && <Button variant="outlined" startIcon={<ReplayRounded />} disabled={busy} onClick={replayActive}>重放一致性</Button>}
             {!!active.path_evidence_json.length && <Button variant="outlined" startIcon={<RouteRounded />} onClick={() => setEvidenceOpen(true)}>逐路径证据</Button>}
+            {active.scenario_state !== 'draft' && <Button variant={compareOpen ? 'contained' : 'outlined'} startIcon={<CompareArrowsRounded />} onClick={() => setCompareOpen((value) => !value)}>{compareOpen ? '收起双方案评审' : '双方案并排评审'}</Button>}
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
           </Box>
+          <Collapse in={compareOpen} unmountOnExit>
+            <ScenarioComparisonPanel baseline={active} scenarios={items} />
+          </Collapse>
           <Box className="rollover-lower-grid"><section><Box className="detail-section-head"><Typography variant="h3">服务可达性</Typography><span>{affectedIds?.length ?? 0} 受影响</span></Box><DependencyGraph services={services} highlightedIds={affectedIds} /></section><section><Box className="detail-section-head"><Typography variant="h3">断裂路径</Typography><span>{active.broken_paths_json.length}</span></Box><Box className="broken-paths">{active.broken_paths_json.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!active.broken_paths_json.length && <Box className="no-broken-paths"><FactCheckRounded /><span>当前证据未发现断裂路径</span></Box>}</Box></section></Box>
         </> : <Box className="detail-placeholder"><Typography>选择一个冻结场景查看推演证据。</Typography></Box>}
       </section>

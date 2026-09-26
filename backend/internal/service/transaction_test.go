@@ -135,6 +135,124 @@ func TestSimulationIdempotencyKeyCannotCrossScenarioBoundary(t *testing.T) {
 	}
 }
 
+func TestCompareRejectsDifferentAlgorithmVersionAndFrozenInput(t *testing.T) {
+	db := newScenarioTestDB(t)
+	now := time.Date(2032, 6, 1, 12, 0, 0, 0, time.UTC)
+	baseSnapshot := comparisonSnapshot(now, now.Add(time.Hour), now.Add(2*time.Hour))
+	baseJSON, _ := baseSnapshot.Canonical()
+	baseHash, _ := baseSnapshot.Hash()
+	baseResult, err := algorithm.Simulate(baseSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	differentVersion := minimalScenario(t, db, "older-algorithm", "hash-version-a", "version-key", "simulated", 7, 0)
+	differentVersion.AlgorithmVersion = "trust-path-window-v0.9.0"
+	differentVersion.InputSnapshot = baseJSON
+	differentVersion.InputHash = "different-version-input"
+	differentVersion.AffectedServicesJSON, differentVersion.BrokenPathsJSON, differentVersion.PathEvidenceJSON = mustResultJSON(baseResult)
+	differentVersion = persistScenario(t, db, differentVersion)
+
+	baseline := minimalScenario(t, db, "baseline-window", baseHash, "baseline-key", "simulated", 7, time.Minute)
+	baseline.AlgorithmVersion = algorithm.Version
+	baseline.InputSnapshot = baseJSON
+	baseline.InputHash = baseHash
+	baseline.AffectedServicesJSON, baseline.BrokenPathsJSON, baseline.PathEvidenceJSON = mustResultJSON(baseResult)
+	baseline = persistScenario(t, db, baseline)
+
+	shiftedSnapshot := comparisonSnapshot(now, now.Add(3*time.Hour), now.Add(4*time.Hour))
+	shiftedJSON, _ := shiftedSnapshot.Canonical()
+	shiftedHash, _ := shiftedSnapshot.Hash()
+	if shiftedHash == baseHash {
+		t.Fatal("window change should alter the full input hash")
+	}
+	frozenBase, _ := baseSnapshot.FrozenInputHash()
+	frozenShifted, _ := shiftedSnapshot.FrozenInputHash()
+	if frozenBase != frozenShifted {
+		t.Fatal("frozen topology hash must match for window-only changes")
+	}
+	shiftedResult, err := algorithm.Simulate(shiftedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shifted := minimalScenario(t, db, "shifted-window", shiftedHash, "shifted-key", "ready", 7, 2*time.Minute)
+	shifted.AlgorithmVersion = algorithm.Version
+	shifted.InputSnapshot = shiftedJSON
+	shifted.InputHash = shiftedHash
+	shifted.AffectedServicesJSON, shifted.BrokenPathsJSON, shifted.PathEvidenceJSON = mustResultJSON(shiftedResult)
+	shifted = persistScenario(t, db, shifted)
+
+	changedTopology := comparisonSnapshot(now, now.Add(time.Hour), now.Add(2*time.Hour))
+	changedTopology.Services[0].TrustAnchorIDs = []uint{2}
+	changedJSON, _ := changedTopology.Canonical()
+	changedResult, err := algorithm.Simulate(changedTopology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := minimalScenario(t, db, "changed-topology", "changed-topology-hash", "changed-key", "simulated", 7, 3*time.Minute)
+	changed.AlgorithmVersion = algorithm.Version
+	changed.InputSnapshot = changedJSON
+	changed.InputHash = "changed-topology-hash"
+	changed.AffectedServicesJSON, changed.BrokenPathsJSON, changed.PathEvidenceJSON = mustResultJSON(changedResult)
+	changed = persistScenario(t, db, changed)
+
+	draft := minimalScenario(t, db, "still-draft", "draft-hash", "", "draft", 7, 4*time.Minute)
+	draft.AlgorithmVersion = algorithm.Version
+	draft.InputSnapshot = baseJSON
+	draft = persistScenario(t, db, draft)
+
+	service := NewRolloverScenarioService(repository.NewRolloverScenarioRepository(db), nil, nil, nil, repository.NewAuditRepository(db), repository.NewTransactionManager(db))
+
+	assertConflict := func(otherID uint, label string) {
+		t.Helper()
+		_, err := service.Compare(context.Background(), baseline.ID, otherID)
+		var apiErr *util.APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict || apiErr.Code != util.CodeScenarioNotComparable {
+			t.Fatalf("%s: got %#v, want 409 %s", label, err, util.CodeScenarioNotComparable)
+		}
+	}
+	assertConflict(differentVersion.ID, "algorithm mismatch")
+	assertConflict(changed.ID, "frozen input mismatch")
+	assertConflict(draft.ID, "draft scenario")
+
+	if _, err := service.Compare(context.Background(), baseline.ID, baseline.ID); err == nil {
+		t.Fatal("comparing a scenario with itself should be rejected")
+	}
+
+	comparison, err := service.Compare(context.Background(), baseline.ID, shifted.ID)
+	if err != nil {
+		t.Fatalf("window-only comparison should succeed: %v", err)
+	}
+	if comparison.First.ScenarioID != baseline.ID || comparison.Second.ScenarioID != shifted.ID {
+		t.Fatalf("comparison sides misassigned: %+v", comparison)
+	}
+	if comparison.First.CriticalAffectedCount < 0 || comparison.Second.CriticalAffectedCount < 0 {
+		t.Fatal("critical damaged counts must be present on both sides")
+	}
+}
+
+func comparisonSnapshot(now, start, end time.Time) algorithm.Snapshot {
+	return algorithm.NewSnapshot(
+		algorithm.ScenarioConfig{Name: "compare", OldAnchorID: 1, NewAnchorID: 2, OverlapStart: start, OverlapEnd: end, CandidateChainIDs: []uint{1, 2}, SimulationTime: now.Add(30 * 24 * time.Hour)},
+		[]algorithm.AnchorSnapshot{
+			{ID: 1, Code: "OLD", State: "valid", NotBefore: now.AddDate(-3, 0, 0), NotAfter: now.AddDate(0, 6, 0)},
+			{ID: 2, Code: "NEW", State: "valid", NotBefore: now.AddDate(0, 0, -1), NotAfter: now.AddDate(6, 0, 0)},
+		},
+		[]algorithm.ChainSnapshot{
+			{ID: 1, Code: "OLD-CHAIN", AnchorID: 1, LeafSubject: "CN=api", ValidFrom: now.AddDate(-1, 0, 0), ValidTo: now.AddDate(0, 4, 0), State: "validated", ValidationValid: true},
+			{ID: 2, Code: "NEW-CHAIN", AnchorID: 2, LeafSubject: "CN=api", ValidFrom: now.AddDate(0, 0, -1), ValidTo: now.AddDate(2, 0, 0), State: "validated", ValidationValid: true},
+		},
+		[]algorithm.ServiceSnapshot{{ID: 1, Code: "EDGE", ChainID: 1, TrustAnchorIDs: []uint{1}, Criticality: "critical", State: "active"}},
+	)
+}
+
+func mustResultJSON(result algorithm.Result) (string, string, string) {
+	affected, _ := encode(result.AffectedServices)
+	paths, _ := encode(result.BrokenPaths)
+	evidence, _ := encode(result.Evidence)
+	return affected, paths, evidence
+}
+
 func TestReplayEvidenceRollsBackWhenAuditAppendFails(t *testing.T) {
 	db := newScenarioTestDB(t)
 	now := time.Date(2032, 6, 1, 12, 0, 0, 0, time.UTC)

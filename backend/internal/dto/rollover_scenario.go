@@ -40,6 +40,7 @@ type RolloverScenarioResponse struct {
 	CandidateChainIDs    []uint                        `json:"candidate_chain_ids"`
 	AlgorithmVersion     string                        `json:"algorithm_version"`
 	InputHash            string                        `json:"input_hash"`
+	FrozenInputHash      string                        `json:"frozen_input_hash"`
 	SimulationTime       time.Time                     `json:"simulation_time"`
 	AffectedServicesJSON []algorithm.AffectedService   `json:"affected_services_json"`
 	BrokenPathsJSON      []algorithm.BrokenPath        `json:"broken_paths_json"`
@@ -72,7 +73,11 @@ func NewRolloverScenarioResponse(scenario model.RolloverScenario, now time.Time)
 	_ = json.Unmarshal([]byte(scenario.AffectedServicesJSON), &affected)
 	_ = json.Unmarshal([]byte(scenario.BrokenPathsJSON), &paths)
 	_ = json.Unmarshal([]byte(scenario.PathEvidenceJSON), &evidence)
-	response := RolloverScenarioResponse{ID: scenario.ID, Name: scenario.Name, OldAnchorID: scenario.OldAnchorID, NewAnchorID: scenario.NewAnchorID, OverlapStart: scenario.OverlapStart, OverlapEnd: scenario.OverlapEnd, CandidateChainIDs: candidateIDs, AlgorithmVersion: scenario.AlgorithmVersion, InputHash: scenario.InputHash, SimulationTime: scenario.SimulationTime, AffectedServicesJSON: affected, BrokenPathsJSON: paths, PathEvidenceJSON: evidence, ScenarioState: scenario.ScenarioState, Explanation: scenario.Explanation, CreatedBy: scenario.CreatedBy, CreatedByName: scenario.CreatedByName, VerifiedBy: scenario.VerifiedBy, VerifiedByName: scenario.VerifiedByName, ReplayVerified: scenario.ReplayVerified, DurationMS: scenario.DurationMS, RollbackRecord: scenario.RollbackRecord, CreatedAt: scenario.CreatedAt, UpdatedAt: scenario.UpdatedAt}
+	frozenInputHash := ""
+	if snapshot, err := algorithm.DecodeSnapshot(scenario.InputSnapshot); err == nil {
+		frozenInputHash, _ = snapshot.FrozenInputHash()
+	}
+	response := RolloverScenarioResponse{ID: scenario.ID, Name: scenario.Name, OldAnchorID: scenario.OldAnchorID, NewAnchorID: scenario.NewAnchorID, OverlapStart: scenario.OverlapStart, OverlapEnd: scenario.OverlapEnd, CandidateChainIDs: candidateIDs, AlgorithmVersion: scenario.AlgorithmVersion, InputHash: scenario.InputHash, FrozenInputHash: frozenInputHash, SimulationTime: scenario.SimulationTime, AffectedServicesJSON: affected, BrokenPathsJSON: paths, PathEvidenceJSON: evidence, ScenarioState: scenario.ScenarioState, Explanation: scenario.Explanation, CreatedBy: scenario.CreatedBy, CreatedByName: scenario.CreatedByName, VerifiedBy: scenario.VerifiedBy, VerifiedByName: scenario.VerifiedByName, ReplayVerified: scenario.ReplayVerified, DurationMS: scenario.DurationMS, RollbackRecord: scenario.RollbackRecord, CreatedAt: scenario.CreatedAt, UpdatedAt: scenario.UpdatedAt}
 	if scenario.OldAnchor.ID != 0 {
 		anchor := NewTrustAnchorResponse(scenario.OldAnchor, 0, now)
 		response.OldAnchor = &anchor

@@ -263,20 +263,58 @@ func (s *RolloverScenarioService) Replay(ctx context.Context, id uint, actor uti
 	}
 	return s.Get(ctx, id)
 }
-func (s *RolloverScenarioService) Compare(ctx context.Context, id, otherID uint) (map[string]any, error) {
+func (s *RolloverScenarioService) Compare(ctx context.Context, id, otherID uint) (algorithm.Comparison, error) {
+	if id == otherID {
+		return algorithm.Comparison{}, util.NewError(http.StatusBadRequest, util.CodeValidation, "select a different scenario to compare against")
+	}
 	first, err := s.scenarios.GetByID(ctx, id, false)
 	if err != nil {
-		return nil, util.NotFound("first rollover scenario")
+		return algorithm.Comparison{}, util.NotFound("baseline rollover scenario")
 	}
 	second, err := s.scenarios.GetByID(ctx, otherID, false)
 	if err != nil {
-		return nil, util.NotFound("second rollover scenario")
+		return algorithm.Comparison{}, util.NotFound("comparison rollover scenario")
+	}
+	if first.ScenarioState == string(constants.ScenarioDraft) || second.ScenarioState == string(constants.ScenarioDraft) {
+		return algorithm.Comparison{}, util.NewError(http.StatusConflict, util.CodeScenarioNotComparable, "both scenarios must be simulated before comparison; run the offline rehearsal first")
+	}
+	if first.AlgorithmVersion != second.AlgorithmVersion {
+		return algorithm.Comparison{}, util.NewError(http.StatusConflict, util.CodeScenarioNotComparable, "refusing to splice results produced by different algorithm versions: "+first.AlgorithmVersion+" versus "+second.AlgorithmVersion)
+	}
+	firstSnapshot, err := algorithm.DecodeSnapshot(first.InputSnapshot)
+	if err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "baseline frozen snapshot is invalid", err)
+	}
+	secondSnapshot, err := algorithm.DecodeSnapshot(second.InputSnapshot)
+	if err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "comparison frozen snapshot is invalid", err)
+	}
+	firstFrozenHash, err := firstSnapshot.FrozenInputHash()
+	if err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to fingerprint baseline frozen input", err)
+	}
+	secondFrozenHash, err := secondSnapshot.FrozenInputHash()
+	if err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to fingerprint comparison frozen input", err)
+	}
+	if firstFrozenHash != secondFrozenHash {
+		return algorithm.Comparison{}, util.NewError(http.StatusConflict, util.CodeScenarioNotComparable, "refusing to splice results built on different frozen inputs: the anchor pair, candidate chains, certificates, or dependency graph changed; freeze both scenarios from the same input and only adjust the overlap window")
 	}
 	var firstAffected, secondAffected []algorithm.AffectedService
 	var firstPaths, secondPaths []algorithm.BrokenPath
-	_ = json.Unmarshal([]byte(first.AffectedServicesJSON), &firstAffected)
-	_ = json.Unmarshal([]byte(second.AffectedServicesJSON), &secondAffected)
-	_ = json.Unmarshal([]byte(first.BrokenPathsJSON), &firstPaths)
-	_ = json.Unmarshal([]byte(second.BrokenPathsJSON), &secondPaths)
-	return map[string]any{"first_id": first.ID, "second_id": second.ID, "same_algorithm": first.AlgorithmVersion == second.AlgorithmVersion, "same_input": first.InputHash == second.InputHash, "summary": algorithm.Compare(algorithm.Result{AffectedServices: firstAffected, BrokenPaths: firstPaths}, algorithm.Result{AffectedServices: secondAffected, BrokenPaths: secondPaths})}, nil
+	if err := json.Unmarshal([]byte(first.AffectedServicesJSON), &firstAffected); err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "baseline affected-service evidence is invalid", err)
+	}
+	if err := json.Unmarshal([]byte(second.AffectedServicesJSON), &secondAffected); err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "comparison affected-service evidence is invalid", err)
+	}
+	if err := json.Unmarshal([]byte(first.BrokenPathsJSON), &firstPaths); err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "baseline broken-path evidence is invalid", err)
+	}
+	if err := json.Unmarshal([]byte(second.BrokenPathsJSON), &secondPaths); err != nil {
+		return algorithm.Comparison{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "comparison broken-path evidence is invalid", err)
+	}
+	firstSide := algorithm.SideSummary(first.ID, first.Name, first.ScenarioState, first.OverlapStart, first.OverlapEnd, algorithm.Result{AffectedServices: firstAffected, BrokenPaths: firstPaths})
+	secondSide := algorithm.SideSummary(second.ID, second.Name, second.ScenarioState, second.OverlapStart, second.OverlapEnd, algorithm.Result{AffectedServices: secondAffected, BrokenPaths: secondPaths})
+	return algorithm.DiffResults(firstSide, secondSide, algorithm.Result{AffectedServices: firstAffected, BrokenPaths: firstPaths}, algorithm.Result{AffectedServices: secondAffected, BrokenPaths: secondPaths}), nil
 }
