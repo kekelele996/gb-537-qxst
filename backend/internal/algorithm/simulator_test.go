@@ -53,3 +53,81 @@ func TestCycleIsRejected(t *testing.T) {
 		t.Fatalf("expected cycle error, got %v", err)
 	}
 }
+
+func TestInventoryHashIgnoresScenarioConfig(t *testing.T) {
+	first := syntheticSnapshot()
+	second := syntheticSnapshot()
+	second.Config.Name = "Adjusted overlap"
+	second.Config.OverlapEnd = second.Config.OverlapEnd.Add(6 * time.Hour)
+	second.Config.SimulationTime = second.Config.SimulationTime.Add(time.Hour)
+	firstHash, err := first.InventoryHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := second.InventoryHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash != secondHash {
+		t.Fatal("inventory hash must be stable across overlap-window adjustments")
+	}
+	second.Services[0].DependencyIDs = []uint{102}
+	changed, err := second.InventoryHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == firstHash {
+		t.Fatal("inventory hash must change when the frozen dependency graph changes")
+	}
+	firstFull, _ := first.Hash()
+	secondFull, _ := second.Hash()
+	if firstFull == secondFull {
+		t.Fatal("full input hash should still capture config and inventory changes")
+	}
+}
+
+func TestDiffSeparatesNewImpactsFromRecovered(t *testing.T) {
+	at := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	later := at.Add(6 * time.Hour)
+	first := Result{
+		AffectedServices: []AffectedService{
+			{ServiceID: 7, ServiceCode: "gateway", Criticality: "critical", At: at, Reason: "old anchor removed"},
+			{ServiceID: 8, ServiceCode: "worker", Criticality: "low", At: at, Reason: "upstream unreachable"},
+			{ServiceID: 9, ServiceCode: "audit", Criticality: "critical", At: later, Reason: "chain expired"},
+		},
+		BrokenPaths: []BrokenPath{
+			{At: at, ServiceCodes: []string{"gateway", "worker"}, Reason: "old anchor removed"},
+			{At: later, ServiceCodes: []string{"audit"}, Reason: "chain expired"},
+		},
+	}
+	second := Result{
+		AffectedServices: []AffectedService{
+			{ServiceID: 7, ServiceCode: "gateway", Criticality: "critical", At: at, Reason: "old anchor removed"},
+			{ServiceID: 10, ServiceCode: "billing", Criticality: "critical", At: later, Reason: "trust set does not include new anchor"},
+		},
+		BrokenPaths: []BrokenPath{
+			{At: at, ServiceCodes: []string{"gateway", "worker"}, Reason: "old anchor removed"},
+			{At: later, ServiceCodes: []string{"billing"}, Reason: "trust set does not include new anchor"},
+		},
+	}
+	delta := Diff(first, second)
+	if len(delta.NewImpacts) != 1 || delta.NewImpacts[0].ServiceCode != "billing" || !delta.NewImpacts[0].At.Equal(later) {
+		t.Fatalf("expected billing as the only new impact: %+v", delta.NewImpacts)
+	}
+	if len(delta.RecoveredImpacts) != 2 {
+		t.Fatalf("expected worker and audit to recover: %+v", delta.RecoveredImpacts)
+	}
+	if len(delta.NewBrokenPaths) != 1 || delta.NewBrokenPaths[0].ServiceCodes[0] != "billing" {
+		t.Fatalf("expected billing path as new: %+v", delta.NewBrokenPaths)
+	}
+	if len(delta.ResolvedBrokenPaths) != 1 || delta.ResolvedBrokenPaths[0].ServiceCodes[0] != "audit" {
+		t.Fatalf("expected audit path resolved: %+v", delta.ResolvedBrokenPaths)
+	}
+	if delta.FirstCriticalAffected != 2 || delta.SecondCriticalAffected != 2 {
+		t.Fatalf("critical counts got %d/%d, want 2/2", delta.FirstCriticalAffected, delta.SecondCriticalAffected)
+	}
+	again := Diff(first, second)
+	if len(again.NewImpacts) != 1 || again.NewImpacts[0].ServiceCode != "billing" {
+		t.Fatal("diff must be deterministic")
+	}
+}

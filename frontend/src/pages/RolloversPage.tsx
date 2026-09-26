@@ -1,4 +1,4 @@
-import { AddRounded, ArrowForwardRounded, AutorenewRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
+import { AddRounded, ArrowForwardRounded, AutorenewRounded, CompareArrowsRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
 import { Alert, Box, Button, Checkbox, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import { FormEvent, useEffect, useState } from 'react'
 import { errorMessage } from '../api/client'
@@ -34,7 +34,7 @@ const transitionCopy: Partial<Record<ScenarioState, { to: ScenarioState; label: 
 }
 
 export function RolloversPage() {
-  const { items, total, status, error, active, fetchScenarios, createScenario, transition, replay, select } = useRolloverScenarioStore()
+  const { items, total, status, error, active, comparison, comparisonError, fetchScenarios, createScenario, transition, replay, select, compareScenarios, clearComparison } = useRolloverScenarioStore()
   const { items: anchors, fetchAnchors } = useTrustAnchorStore()
   const { items: chains, fetchChains } = useCertificateChainStore()
   const { items: services, fetchServices } = useDependentServiceStore()
@@ -46,9 +46,12 @@ export function RolloversPage() {
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
+  const [compareTarget, setCompareTarget] = useState<number | ''>('')
+  const [compareBusy, setCompareBusy] = useState(false)
 
   useEffect(() => { void fetchScenarios(); void fetchAnchors(); void fetchChains(); void fetchServices() }, [fetchAnchors, fetchChains, fetchScenarios, fetchServices])
   useEffect(() => { if (!active && items.length) select(items[0]) }, [active, items, select])
+  useEffect(() => { setCompareTarget('') }, [active?.id])
   const affectedIds = active?.affected_services_json.map((item) => item.service_id ?? item.id).filter(Boolean) as number[] | undefined
 
   const openCreate = () => {
@@ -80,6 +83,14 @@ export function RolloversPage() {
     try { const updated = await replay(active.id); setSuccess(updated.replay_verified ? '重放结果与冻结历史证据一致。' : '重放结果不一致。') }
     catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
   }
+  const runCompare = async () => {
+    if (!active || !compareTarget) return
+    setCompareBusy(true)
+    try { await compareScenarios(active.id, compareTarget) }
+    finally { setCompareBusy(false) }
+  }
+
+  const comparableItems = items.filter((item) => item.id !== active?.id && item.scenario_state !== 'draft')
 
   const next = active ? transitionCopy[active.scenario_state] : undefined
   const canAdvance = next && ((next.to === 'verified' && can('scenario.verify')) || (next.to !== 'verified' && can('scenario.write')))
@@ -109,6 +120,42 @@ export function RolloversPage() {
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
           </Box>
           <Box className="rollover-lower-grid"><section><Box className="detail-section-head"><Typography variant="h3">服务可达性</Typography><span>{affectedIds?.length ?? 0} 受影响</span></Box><DependencyGraph services={services} highlightedIds={affectedIds} /></section><section><Box className="detail-section-head"><Typography variant="h3">断裂路径</Typography><span>{active.broken_paths_json.length}</span></Box><Box className="broken-paths">{active.broken_paths_json.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!active.broken_paths_json.length && <Box className="no-broken-paths"><FactCheckRounded /><span>当前证据未发现断裂路径</span></Box>}</Box></section></Box>
+          <section className="compare-panel">
+            <Box className="detail-section-head"><Typography variant="h3">方案对比</Typography><span>{comparison ? `#${comparison.first_id} vs #${comparison.second_id}` : '选择另一条已推演场景'}</span></Box>
+            <Box className="compare-toolbar">
+              <FormControl size="small" className="compare-select">
+                <InputLabel>对比场景</InputLabel>
+                <Select label="对比场景" value={compareTarget} onChange={(event) => setCompareTarget(Number(event.target.value))}>
+                  {comparableItems.map((scenario) => <MenuItem key={scenario.id} value={scenario.id}>#{scenario.id} · {scenario.name}</MenuItem>)}
+                </Select>
+              </FormControl>
+              <Button variant="outlined" startIcon={<CompareArrowsRounded />} disabled={!compareTarget || compareBusy} onClick={runCompare}>{compareBusy ? '正在对比…' : '对比方案'}</Button>
+            </Box>
+            {!comparableItems.length && <Alert severity="info">没有其他已完成推演的场景可对比。先冻结并运行另一条调整过交叠时间的方案。</Alert>}
+            {comparisonError && <Alert severity="error" onClose={clearComparison}>{comparisonError}</Alert>}
+            {comparison && <>
+              <Box className="compare-grid">
+                <Box><Typography className="eyebrow">{comparison.first_name} · 关键服务受损</Typography><strong>{comparison.first_critical_affected}</strong><span>场景 #{comparison.first_id}</span></Box>
+                <Box className={comparison.second_critical_affected > comparison.first_critical_affected ? 'is-risk' : 'is-pass'}><Typography className="eyebrow">{comparison.second_name} · 关键服务受损</Typography><strong>{comparison.second_critical_affected}</strong><span>场景 #{comparison.second_id}</span></Box>
+                <Box><Typography className="eyebrow">新增影响</Typography><strong>{comparison.new_impacts.length}</strong><span>第二方案新出现的故障</span></Box>
+                <Box><Typography className="eyebrow">恢复项</Typography><strong>{comparison.recovered_impacts.length}</strong><span>第二方案消除的故障</span></Box>
+              </Box>
+              <Box className="compare-lists">
+                <section>
+                  <Box className="detail-section-head"><Typography variant="h3">新增影响</Typography><span>{comparison.new_impacts.length}</span></Box>
+                  <Box className="impact-list is-new">{comparison.new_impacts.map((impact, index) => <Box key={`${impact.service_id}-${impact.at}-${index}`}><span>{formatDateTime(impact.at)} · {impact.criticality}</span><strong>{impact.service_code}</strong><Typography>{impact.reason}</Typography></Box>)}{!comparison.new_impacts.length && <Box className="impact-empty"><FactCheckRounded /><span>第二方案没有新增服务故障</span></Box>}</Box>
+                  <Box className="detail-section-head"><Typography variant="h3">新增断裂路径</Typography><span>{comparison.new_broken_paths.length}</span></Box>
+                  <Box className="broken-paths">{comparison.new_broken_paths.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!comparison.new_broken_paths.length && <Box className="no-broken-paths"><FactCheckRounded /><span>没有新增断裂路径</span></Box>}</Box>
+                </section>
+                <section>
+                  <Box className="detail-section-head"><Typography variant="h3">恢复项</Typography><span>{comparison.recovered_impacts.length}</span></Box>
+                  <Box className="impact-list is-recovered">{comparison.recovered_impacts.map((impact, index) => <Box key={`${impact.service_id}-${impact.at}-${index}`}><span>{formatDateTime(impact.at)} · {impact.criticality}</span><strong>{impact.service_code}</strong><Typography>{impact.reason}</Typography></Box>)}{!comparison.recovered_impacts.length && <Box className="impact-empty"><AutorenewRounded /><span>第二方案没有恢复任何故障</span></Box>}</Box>
+                  <Box className="detail-section-head"><Typography variant="h3">已消除断裂路径</Typography><span>{comparison.resolved_broken_paths.length}</span></Box>
+                  <Box className="broken-paths is-resolved">{comparison.resolved_broken_paths.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!comparison.resolved_broken_paths.length && <Box className="no-broken-paths"><FactCheckRounded /><span>没有断裂路径被消除</span></Box>}</Box>
+                </section>
+              </Box>
+            </>}
+          </section>
         </> : <Box className="detail-placeholder"><Typography>选择一个冻结场景查看推演证据。</Typography></Box>}
       </section>
     </Box>

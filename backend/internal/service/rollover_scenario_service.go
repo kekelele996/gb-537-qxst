@@ -263,14 +263,42 @@ func (s *RolloverScenarioService) Replay(ctx context.Context, id uint, actor uti
 	}
 	return s.Get(ctx, id)
 }
-func (s *RolloverScenarioService) Compare(ctx context.Context, id, otherID uint) (map[string]any, error) {
+func (s *RolloverScenarioService) Compare(ctx context.Context, id, otherID uint) (dto.RolloverScenarioComparisonResponse, error) {
+	if id == otherID {
+		return dto.RolloverScenarioComparisonResponse{}, util.NewError(http.StatusBadRequest, util.CodeValidation, "choose two distinct scenarios to compare")
+	}
 	first, err := s.scenarios.GetByID(ctx, id, false)
 	if err != nil {
-		return nil, util.NotFound("first rollover scenario")
+		return dto.RolloverScenarioComparisonResponse{}, util.NotFound("first rollover scenario")
 	}
 	second, err := s.scenarios.GetByID(ctx, otherID, false)
 	if err != nil {
-		return nil, util.NotFound("second rollover scenario")
+		return dto.RolloverScenarioComparisonResponse{}, util.NotFound("second rollover scenario")
+	}
+	if first.ScenarioState == string(constants.ScenarioDraft) || second.ScenarioState == string(constants.ScenarioDraft) {
+		return dto.RolloverScenarioComparisonResponse{}, util.NewError(http.StatusConflict, util.CodeStateTransition, "both scenarios must complete simulation before their results can be compared")
+	}
+	if first.AlgorithmVersion != second.AlgorithmVersion {
+		return dto.RolloverScenarioComparisonResponse{}, util.NewError(http.StatusConflict, util.CodeCompareMismatch, "scenarios were simulated by different algorithm versions ("+first.AlgorithmVersion+" vs "+second.AlgorithmVersion+"); re-run both scenarios with the same algorithm version before comparing")
+	}
+	firstSnapshot, err := algorithm.DecodeSnapshot(first.InputSnapshot)
+	if err != nil {
+		return dto.RolloverScenarioComparisonResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "first scenario snapshot is invalid", err)
+	}
+	secondSnapshot, err := algorithm.DecodeSnapshot(second.InputSnapshot)
+	if err != nil {
+		return dto.RolloverScenarioComparisonResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "second scenario snapshot is invalid", err)
+	}
+	firstInventory, err := firstSnapshot.InventoryHash()
+	if err != nil {
+		return dto.RolloverScenarioComparisonResponse{}, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to hash first frozen inventory", err)
+	}
+	secondInventory, err := secondSnapshot.InventoryHash()
+	if err != nil {
+		return dto.RolloverScenarioComparisonResponse{}, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to hash second frozen inventory", err)
+	}
+	if firstInventory != secondInventory {
+		return dto.RolloverScenarioComparisonResponse{}, util.NewError(http.StatusConflict, util.CodeCompareMismatch, "scenarios froze different trust inventories (anchors, chains, or the dependency graph changed between freezes); re-freeze both scenarios from identical inputs before comparing")
 	}
 	var firstAffected, secondAffected []algorithm.AffectedService
 	var firstPaths, secondPaths []algorithm.BrokenPath
@@ -278,5 +306,6 @@ func (s *RolloverScenarioService) Compare(ctx context.Context, id, otherID uint)
 	_ = json.Unmarshal([]byte(second.AffectedServicesJSON), &secondAffected)
 	_ = json.Unmarshal([]byte(first.BrokenPathsJSON), &firstPaths)
 	_ = json.Unmarshal([]byte(second.BrokenPathsJSON), &secondPaths)
-	return map[string]any{"first_id": first.ID, "second_id": second.ID, "same_algorithm": first.AlgorithmVersion == second.AlgorithmVersion, "same_input": first.InputHash == second.InputHash, "summary": algorithm.Compare(algorithm.Result{AffectedServices: firstAffected, BrokenPaths: firstPaths}, algorithm.Result{AffectedServices: secondAffected, BrokenPaths: secondPaths})}, nil
+	delta := algorithm.Diff(algorithm.Result{AffectedServices: firstAffected, BrokenPaths: firstPaths}, algorithm.Result{AffectedServices: secondAffected, BrokenPaths: secondPaths})
+	return dto.RolloverScenarioComparisonResponse{FirstID: first.ID, FirstName: first.Name, SecondID: second.ID, SecondName: second.Name, AlgorithmVersion: first.AlgorithmVersion, InventoryHash: firstInventory, FirstCriticalAffected: delta.FirstCriticalAffected, SecondCriticalAffected: delta.SecondCriticalAffected, NewImpacts: delta.NewImpacts, RecoveredImpacts: delta.RecoveredImpacts, NewBrokenPaths: delta.NewBrokenPaths, ResolvedBrokenPaths: delta.ResolvedBrokenPaths}, nil
 }

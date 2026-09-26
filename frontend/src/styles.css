@@ -233,6 +233,36 @@ button, input, textarea, select { letter-spacing: 0; }
 .broken-paths p { margin-top: 4px; color: #725a57; font-size: .67rem; line-height: 1.45; }
 .broken-paths .no-broken-paths { display: flex; align-items: center; gap: 7px; border-color: #b8cec2; background: #e8f0eb; color: var(--green); font-size: .75rem; }
 
+.compare-panel { margin-top: 26px; }
+.compare-panel > .detail-section-head { margin-top: 0; }
+.compare-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.compare-toolbar .compare-select { min-width: 320px; }
+.compare-panel > .MuiAlert-root { margin-top: 12px; }
+.compare-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 14px; border: 1px solid var(--mineral-3); }
+.compare-grid > div { min-width: 0; min-height: 78px; padding: 12px; border-right: 1px solid var(--mineral-3); }
+.compare-grid > div:last-child { border-right: 0; }
+.compare-grid strong, .compare-grid span { display: block; }
+.compare-grid strong { margin-top: 5px; font-size: 1.15rem; overflow-wrap: anywhere; }
+.compare-grid > div > span { margin-top: 4px; color: #6e7b74; font-size: .62rem; }
+.compare-grid .is-risk strong { color: var(--red); }
+.compare-grid .is-pass strong { color: var(--green); }
+.compare-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 23px; }
+.impact-list { display: flex; flex-direction: column; gap: 8px; }
+.impact-list > div { padding: 11px; border: 1px solid #dbc2bf; background: #f5e9e7; }
+.impact-list.is-recovered > div { border-color: #b8cec2; background: #e8f0eb; }
+.impact-list span, .impact-list strong { display: block; }
+.impact-list span { color: #7e6865; font-size: .62rem; }
+.impact-list.is-recovered span { color: #60746a; }
+.impact-list strong { margin-top: 5px; color: #853935; font-size: .73rem; overflow-wrap: anywhere; }
+.impact-list.is-recovered strong { color: var(--green); }
+.impact-list p { margin-top: 4px; color: #725a57; font-size: .67rem; line-height: 1.45; }
+.impact-list.is-recovered p { color: #4c6156; }
+.impact-list .impact-empty { display: flex; align-items: center; gap: 7px; border-color: #b8cec2; background: #e8f0eb; color: var(--green); font-size: .75rem; }
+.broken-paths.is-resolved > div { border-color: #b8cec2; background: #e8f0eb; }
+.broken-paths.is-resolved span { color: #60746a; }
+.broken-paths.is-resolved strong { color: var(--green); }
+.broken-paths.is-resolved p { color: #4c6156; }
+
 .audit-register { border: 1px solid var(--mineral-3); background: var(--mineral-0); }
 .audit-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 67px; padding: 12px 15px; border-bottom: 1px solid var(--mineral-3); }
 .audit-toolbar > div { display: flex; align-items: center; gap: 8px; }

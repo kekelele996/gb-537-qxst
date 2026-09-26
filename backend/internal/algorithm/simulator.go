@@ -108,6 +108,21 @@ func (snapshot Snapshot) Hash() (string, error) {
 	}
 	return util.HashString(raw), nil
 }
+
+// InventoryHash fingerprints only the frozen trust inventory (anchors, chains,
+// and services). Scenario config such as the overlap window is excluded so two
+// rehearsed plans against the same frozen input remain comparable.
+func (snapshot Snapshot) InventoryHash() (string, error) {
+	raw, err := util.CanonicalJSON(struct {
+		Anchors  []AnchorSnapshot  `json:"anchors"`
+		Chains   []ChainSnapshot   `json:"chains"`
+		Services []ServiceSnapshot `json:"services"`
+	}{snapshot.Anchors, snapshot.Chains, snapshot.Services})
+	if err != nil {
+		return "", err
+	}
+	return util.HashString(raw), nil
+}
 func DecodeSnapshot(raw string) (Snapshot, error) {
 	var snapshot Snapshot
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
@@ -312,8 +327,80 @@ func explain(config ScenarioConfig, result Result) string {
 	}
 	return strings.Join(parts, " ")
 }
-func Compare(first, second Result) map[string]any {
-	return map[string]any{"first_affected": len(first.AffectedServices), "second_affected": len(second.AffectedServices), "affected_delta": len(second.AffectedServices) - len(first.AffectedServices), "first_broken_paths": len(first.BrokenPaths), "second_broken_paths": len(second.BrokenPaths)}
+
+// ImpactDelta describes how the second scenario's stored result differs from
+// the first: impacts and broken paths that appear for the first time, and ones
+// that the adjusted plan recovered, keyed by service and timepoint.
+type ImpactDelta struct {
+	NewImpacts             []AffectedService `json:"new_impacts"`
+	RecoveredImpacts       []AffectedService `json:"recovered_impacts"`
+	NewBrokenPaths         []BrokenPath      `json:"new_broken_paths"`
+	ResolvedBrokenPaths    []BrokenPath      `json:"resolved_broken_paths"`
+	FirstCriticalAffected  int               `json:"first_critical_affected"`
+	SecondCriticalAffected int               `json:"second_critical_affected"`
+}
+
+func Diff(first, second Result) ImpactDelta {
+	delta := ImpactDelta{NewImpacts: []AffectedService{}, RecoveredImpacts: []AffectedService{}, NewBrokenPaths: []BrokenPath{}, ResolvedBrokenPaths: []BrokenPath{}}
+	firstImpacts := map[string]bool{}
+	for _, item := range first.AffectedServices {
+		firstImpacts[impactKey(item)] = true
+	}
+	secondImpacts := map[string]bool{}
+	for _, item := range second.AffectedServices {
+		secondImpacts[impactKey(item)] = true
+		if !firstImpacts[impactKey(item)] {
+			delta.NewImpacts = append(delta.NewImpacts, item)
+		}
+	}
+	for _, item := range first.AffectedServices {
+		if !secondImpacts[impactKey(item)] {
+			delta.RecoveredImpacts = append(delta.RecoveredImpacts, item)
+		}
+	}
+	firstPaths := map[string]bool{}
+	for _, path := range first.BrokenPaths {
+		firstPaths[pathKey(path)] = true
+	}
+	secondPaths := map[string]bool{}
+	for _, path := range second.BrokenPaths {
+		secondPaths[pathKey(path)] = true
+		if !firstPaths[pathKey(path)] {
+			delta.NewBrokenPaths = append(delta.NewBrokenPaths, path)
+		}
+	}
+	for _, path := range first.BrokenPaths {
+		if !secondPaths[pathKey(path)] {
+			delta.ResolvedBrokenPaths = append(delta.ResolvedBrokenPaths, path)
+		}
+	}
+	delta.FirstCriticalAffected = criticalServiceCount(first.AffectedServices)
+	delta.SecondCriticalAffected = criticalServiceCount(second.AffectedServices)
+	sort.Slice(delta.NewImpacts, func(i, j int) bool { return impactKey(delta.NewImpacts[i]) < impactKey(delta.NewImpacts[j]) })
+	sort.Slice(delta.RecoveredImpacts, func(i, j int) bool {
+		return impactKey(delta.RecoveredImpacts[i]) < impactKey(delta.RecoveredImpacts[j])
+	})
+	sort.Slice(delta.NewBrokenPaths, func(i, j int) bool { return pathKey(delta.NewBrokenPaths[i]) < pathKey(delta.NewBrokenPaths[j]) })
+	sort.Slice(delta.ResolvedBrokenPaths, func(i, j int) bool {
+		return pathKey(delta.ResolvedBrokenPaths[i]) < pathKey(delta.ResolvedBrokenPaths[j])
+	})
+	return delta
+}
+
+func impactKey(item AffectedService) string {
+	return fmt.Sprintf("%020d@%s", item.ServiceID, item.At.UTC().Format(time.RFC3339Nano))
+}
+func pathKey(path BrokenPath) string {
+	return path.At.UTC().Format(time.RFC3339Nano) + "|" + strings.Join(path.ServiceCodes, ">") + "|" + path.Reason
+}
+func criticalServiceCount(affected []AffectedService) int {
+	seen := map[uint]bool{}
+	for _, item := range affected {
+		if item.Criticality == "critical" {
+			seen[item.ServiceID] = true
+		}
+	}
+	return len(seen)
 }
 func detectCycle(services []ServiceSnapshot) error {
 	edges := map[uint][]uint{}

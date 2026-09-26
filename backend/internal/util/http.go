@@ -22,6 +22,7 @@ const (
 	CodeStateTransition  = "INVALID_STATE_TRANSITION"
 	CodeIdempotency      = "IDEMPOTENCY_CONFLICT"
 	CodeReviewerConflict = "REVIEWER_SEPARATION_REQUIRED"
+	CodeCompareMismatch  = "COMPARISON_INPUT_MISMATCH"
 	CodeInternal         = "INTERNAL_ERROR"
 )
 

@@ -63,6 +63,21 @@ type RolloverScenarioListResponse struct {
 	Size  int                        `json:"size"`
 }
 
+type RolloverScenarioComparisonResponse struct {
+	FirstID                uint                        `json:"first_id"`
+	FirstName              string                      `json:"first_name"`
+	SecondID               uint                        `json:"second_id"`
+	SecondName             string                      `json:"second_name"`
+	AlgorithmVersion       string                      `json:"algorithm_version"`
+	InventoryHash          string                      `json:"inventory_hash"`
+	FirstCriticalAffected  int                         `json:"first_critical_affected"`
+	SecondCriticalAffected int                         `json:"second_critical_affected"`
+	NewImpacts             []algorithm.AffectedService `json:"new_impacts"`
+	RecoveredImpacts       []algorithm.AffectedService `json:"recovered_impacts"`
+	NewBrokenPaths         []algorithm.BrokenPath      `json:"new_broken_paths"`
+	ResolvedBrokenPaths    []algorithm.BrokenPath      `json:"resolved_broken_paths"`
+}
+
 func NewRolloverScenarioResponse(scenario model.RolloverScenario, now time.Time) RolloverScenarioResponse {
 	candidateIDs := []uint{}
 	affected := []algorithm.AffectedService{}

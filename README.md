@@ -69,6 +69,8 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
 
+`GET /rollover-scenarios/:id/compare/:other_id` diffs two simulated scenarios service-by-service and timepoint-by-timepoint: it lists impacts and broken paths that are new in the second plan, the ones it recovered, and the critical-service impact counts on both sides. Comparison is refused with `409 COMPARISON_INPUT_MISMATCH` when the two scenarios were built by different algorithm versions or froze different trust inventories (anchors, chains, or the dependency graph), and with `409 INVALID_STATE_TRANSITION` while either scenario is still a draft.
+
 ## Configuration and ports
 
 Copy `.env.example` to `.env` for local configuration. `.env` is intentionally ignored by Git.

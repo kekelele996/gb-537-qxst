@@ -74,3 +74,18 @@ export interface CreateRolloverScenarioInput {
   simulation_time: string
 }
 
+export interface ScenarioComparison {
+  first_id: number
+  first_name: string
+  second_id: number
+  second_name: string
+  algorithm_version: string
+  inventory_hash: string
+  first_critical_affected: number
+  second_critical_affected: number
+  new_impacts: AffectedService[]
+  recovered_impacts: AffectedService[]
+  new_broken_paths: BrokenPath[]
+  resolved_broken_paths: BrokenPath[]
+}
+
